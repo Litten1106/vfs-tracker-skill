@@ -174,18 +174,18 @@ The EU EES calculator uses a **2-digit number selection CAPTCHA** (two tiny imag
    ✅ 表单已填写
    🔐 验证码识别: [PFKRG]
 
-┌─ Query Result ──────────────────────────────────────────┐
+┌─ Query Result ───────────────────────────────────────────┐
 │                                                          │
-│  目标国家 : 冰岛 (Iceland) (ISL)                          │
-│  申请编号 : ISL/PVG/010101/0001/01                        │
-│  姓氏     : DOE                                           │
-│  Embassy  : Iceland Embassy                               │
+│  目标国家 : 冰岛 (Iceland) (ISL)                         │
+│  申请编号 : ISL/PVG/010101/0001/01                       │
+│  姓氏     : DOE                                          │
+│  Embassy  : Iceland Embassy                              │
 │                                                          │
-│  📨 申请已送达                                            │
-│  您的签证申请材料已送达 Iceland Embassy。                 │
+│  📨 申请已送达                                           │
+│  您的签证申请材料已送达 Iceland Embassy。                │
 │                                                          │
-│  进度: ● → ○ → ○ → ○ → ○ → ○                              │
-│        Recv  Fwd  Review  Decide  Ship  Done              │
+│  进度: ● → ○ → ○ → ○ → ○ → ○                             │
+│        Recv  Fwd  Review  Decide  Ship  Done             │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
 ```
