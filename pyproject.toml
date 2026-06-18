@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vfs-tracker"
+version = "1.0.0"
+description = "Headless VFS Global Schengen Visa Status Tracker + EU EES calculator"
+readme = "README.md"
+license = "MIT"
+authors = [{name = "litten.lin"}]
+keywords = ["vfs", "schengen", "visa", "tracker", "ees", "travel"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Utilities",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "selenium>=4.0.0",
+    "selenium-stealth>=1.0.0",
+    "ddddocr>=1.0.0",
+    "Pillow>=10.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/litten-lin/vfs-tracker"
+Repository = "https://github.com/litten-lin/vfs-tracker"
+Issues = "https://github.com/litten-lin/vfs-tracker/issues"
+
+[project.scripts]
+vfs-tracker = "vfs_tracker:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+vfs_tracker = ["countries.json", "q_params.json"]

@@ -1,0 +1,4 @@
+{
+  "_comment": "This file caches VFS Global tracking endpoints (q-params) per country. Each country's q-param is discovered once via browser and cached here for subsequent pure-HTTP queries. Commit this file if you want to share cached endpoints with your team.",
+  "isl": "shSA0YnE4pLF9Xzwon/x/LZichRNvadRezZVFEYcVI60hn/qmtP4d3S1GWHyZTsihMTAABwx1tIrV59MchxEQimnzT8j9AQBO+QHZ3ju6JU="
+}
