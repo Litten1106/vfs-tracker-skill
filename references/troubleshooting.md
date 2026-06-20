@@ -23,6 +23,19 @@ vfs-tracker uses a **two-layer design**:
 - Windows: should work with built-in Photos app
 **Workaround**: The CAPTCHA is saved to your system temp directory (`/tmp/vfs-captcha.png` on macOS/Linux, `%TEMP%/vfs-captcha.png` on Windows). Open it manually.
 
+### 2b. CAPTCHA keeps failing / "the captcha stays the same"
+
+**Symptoms**: Every retry shows the same captcha and the query never succeeds
+**Cause**: The VFS `DefaultCaptcha` image is one-shot per page render. Re-requesting
+the `Generate` endpoint (or clicking the in-page refresh link) returns a *blank*
+image, so OCR loops on garbage.
+**Fix (built in)**: The tracker no longer clicks the refresh link. After an
+incorrect submit the form posts back and the page reloads with a brand-new valid
+captcha, which is read directly from the rendered `<img>`. OCR output is also
+normalised to 5 uppercase letters (`A-Z`). If a query still fails, simply run it
+again — each attempt now uses a genuinely fresh captcha (`MAX_CAPTCHA_RETRIES`
+attempts per run).
+
 ### 3. No Records Found
 
 **Symptoms**: "No records found" or "Invalid Inputs"

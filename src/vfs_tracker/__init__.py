@@ -25,7 +25,7 @@ COUNTRIES_FILE = SCRIPT_DIR / "countries.json"
 Q_PARAMS_FILE = SCRIPT_DIR / "q_params.json"
 VFS_TRACKING_BASE = "https://www.vfsvisaonline.com"
 VFS_TRACKING_PATH = "/Global-Passporttracking/Track/Index"
-MAX_CAPTCHA_RETRIES = 5
+MAX_CAPTCHA_RETRIES = 8
 EES_API = "https://travel-europe.europa.eu/api/tcn/stay-verification"
 
 
@@ -240,16 +240,37 @@ def track(q_param: str, reference_number: str, last_name: str) -> dict | None:
         time.sleep(1.5)
         print(f"   ✅ {tt('loaded', n=len(driver.page_source))}")
 
-        driver.find_element(By.NAME, "AppRefNo").send_keys(reference_number)
-        driver.find_element(By.NAME, "LastName").send_keys(last_name)
         print(f"   ✅ {tt('filled')}")
 
         ocr = ddddocr.DdddOcr(show_ad=False)
 
         for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
+            # The VFS form posts back and reloads on every incorrect submit, so
+            # re-fill the inputs each iteration (they are blank on a fresh page).
+            ref_input = driver.find_element(By.NAME, "AppRefNo")
+            ref_input.clear()
+            ref_input.send_keys(reference_number)
+            name_input = driver.find_element(By.NAME, "LastName")
+            name_input.clear()
+            name_input.send_keys(last_name)
+
+            # Read the captcha straight from the freshly-rendered <img>. The
+            # DefaultCaptcha is always 5 uppercase letters (A-Z), so strip any
+            # noise characters and force uppercase to maximise OCR accuracy.
             img = driver.find_element(By.CSS_SELECTOR, 'img[src*="DefaultCaptcha"]')
-            text = ocr.classification(img.screenshot_as_png) or ""
+            raw = ocr.classification(img.screenshot_as_png) or ""
+            text = re.sub(r"[^A-Za-z]", "", raw).upper()
             print(f"   🔐 {tt('captcha', text=text or '?')}")
+
+            if len(text) != 5:
+                # Garbled read — reload the page to get a fresh captcha image
+                # instead of re-requesting the one-shot Generate endpoint
+                # (which returns a blank image on repeat hits).
+                print(f"   🔄 {tt('retry', n=attempt, total=MAX_CAPTCHA_RETRIES)}")
+                driver.get(url)
+                WebDriverWait(driver, 30).until(lambda d: len(d.page_source) > 5000)
+                time.sleep(1.0)
+                continue
 
             inp = driver.find_element(By.NAME, "CaptchaInputText")
             inp.clear()
@@ -260,10 +281,12 @@ def track(q_param: str, reference_number: str, last_name: str) -> dict | None:
             body = driver.find_element(By.TAG_NAME, "body").text
 
             if "incorrect" in body.lower():
+                # On an incorrect submit the page has already reloaded with a
+                # brand-new, valid captcha. Just loop and read it again. Do NOT
+                # click the refresh link — it blanks the freshly served image
+                # and breaks every subsequent attempt.
                 print(f"   🔄 {tt('retry', n=attempt, total=MAX_CAPTCHA_RETRIES)}")
-                ref_link = driver.find_element(By.CSS_SELECTOR, 'a[href="#CaptchaImage"]')
-                driver.execute_script("arguments[0].click();", ref_link)
-                time.sleep(1)
+                time.sleep(0.5)
                 continue
 
             return parse_body(body, reference_number, last_name)
