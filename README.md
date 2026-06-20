@@ -176,17 +176,29 @@ The EU EES calculator uses a **2-digit number selection CAPTCHA** (two tiny imag
 
 ── Query Result ──
 
-  目标国家 : 冰岛 (Iceland) (ISL)
-  申请编号 : ISL/PVG/010101/0001/01
-  姓氏     : DOE
-  Embassy  : Iceland Embassy
-
   📨 申请已送达
-  您的签证申请材料已送达 Iceland Embassy。
-
   进度: ● → ○ → ○ → ○ → ○ → ○
         Recv  Fwd  Review  Decide  Ship  Done
+
+📄 原始文案：
+   Your visa application reference no. ISL/PVG/010101/0001/01 has been
+   received by Iceland Embassy in Beijing.
+
+材料已经稳稳交到使馆手里了，第一步走完。接下来就是等——签证官审材料急不来，
+你能做的都做完了，松口气，过几天再回来看一眼就好。
 ```
+
+> Language auto-follows your system locale (`LANG`). Force Chinese with
+> `LANG=zh_CN.UTF-8 vfs-tracker isl -r ... -l ...`.
+
+---
+
+## What's New
+
+- **1.0.3** — Surfaces the full original VFS message verbatim, plus warm,
+  per-status encouragement (and a reapply/appeal plan once a decision is made).
+- **1.0.2** — Reliable CAPTCHA handling: uppercase normalization, fresh captcha
+  on every retry (no more "stuck on the same captcha"), more retries.
 
 ---
 
