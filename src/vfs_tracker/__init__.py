@@ -306,6 +306,15 @@ def parse_body(body_text: str, reference_number: str, last_name: str) -> dict:
     if m:
         embassy = m.group(1).strip().title()
 
+    # Capture the exact sentence VFS shows (e.g. "Your visa application
+    # reference no. ABC/123 has been received by Iceland Embassy in Beijing.").
+    # Grab the whole line — the reference no.'s own period would otherwise cut a
+    # non-greedy match short at "...reference no.".
+    raw_message = ""
+    rm = re.search(r"(your visa application[^\n]*)", body_text, re.I)
+    if rm:
+        raw_message = re.sub(r"\s+", " ", rm.group(1)).strip()
+
     matched = "generic"
     for key in ["received", "forwarded", "under_process", "decision",
                 "dispatched", "delivered", "collection", "invalid", "no_record"]:
@@ -324,6 +333,7 @@ def parse_body(body_text: str, reference_number: str, last_name: str) -> dict:
         "embassy": embassy,
         "ref": reference_number,
         "name": last_name,
+        "raw_message": raw_message,
     }
 
 
@@ -368,6 +378,89 @@ def print_card(result: dict, country_name: str, country_code: str):
 
     print("╚" + "═" * 58 + "╝")
     print()
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  Mood / human-toned message per status
+# ══════════════════════════════════════════════════════════════════════
+
+_MOOD = {
+    "zh": {
+        "received": "材料已经稳稳交到使馆手里了，第一步走完。接下来就是等——签证官审材料急不来，"
+                    "你能做的都做完了，松口气，过几天再回来看一眼就好。",
+        "forwarded": "往前挪了一格，材料已经转进审理环节。节奏在动，继续耐心等就行。",
+        "under_process": "签证官正在看你的材料了。这通常是最熬人的一段，但也恰恰说明流程在推进，再扛一下。",
+        "decision": "结果出来了！去取护照或留意通知吧。\n\n"
+                    "如果是 approved——恭喜你，冰岛见！🎉 极光、黑沙滩、蓝湖都在等你。\n"
+                    "万一这次没过，也真的别灰心，拒签不是终点，下面给你一套二签思路。",
+        "dispatched": "护照已经在寄回的路上了，盯一下快递信息。快到手了。",
+        "delivered": "护照到手啦，翻到签证页确认一下信息有没有错。准备打包行李吧。",
+        "collection": "护照已经到签证中心，带好证件去把它取回来吧。",
+        "invalid": "信息对不上。检查一下申请编号和姓氏拼写，尤其是斜杠和大小写。",
+        "no_record": "暂时没查到记录。可能是刚提交还没入库，或者信息有出入，过会儿再试试。",
+        "generic": "状态已查询到，但没匹配到标准描述。可以对照原始文案看一眼。",
+    },
+    "en": {
+        "received": "Your documents are safely with the embassy now — step one done. "
+                    "From here it's just waiting; the officer reviews at their own pace. "
+                    "You've done your part, so relax and check back in a few days.",
+        "forwarded": "One notch forward — your file has moved into the review stage. "
+                     "Things are moving; just keep waiting.",
+        "under_process": "The officer is actively looking at your application. This is usually "
+                         "the most nerve-wracking stretch, but it also means the wheels are turning. Hang in there.",
+        "decision": "A decision is in! Go collect your passport or watch for the notice.\n\n"
+                    "If it's approved — congratulations, see you in Iceland! 🎉\n"
+                    "If it didn't go through this time, don't lose heart. A refusal isn't the end — "
+                    "there's a second-application plan below.",
+        "dispatched": "Your passport is on its way back — keep an eye on the courier. Almost there.",
+        "delivered": "Passport's in your hands. Flip to the visa page and double-check the details, then start packing.",
+        "collection": "Your passport is at the visa centre. Bring your ID and go pick it up.",
+        "invalid": "The details don't match. Re-check the reference number and surname spelling, slashes and case included.",
+        "no_record": "No record yet. It may be too soon after submission, or a detail is off. Try again later.",
+        "generic": "Status retrieved, but it didn't match a standard description. Check the original message above.",
+    },
+}
+
+_REAPPLY = {
+    "zh": [
+        "拒签信里会写明拒签理由（对应申根签证条款），先看清是哪一条，对症下药。",
+        "想申诉：可在使馆规定期限内书面 appeal，适合材料没问题、纯属误判的情况。",
+        "想二签：更常见也更快——针对拒签理由补强，比如把资金证明做厚、行程更具体、",
+        "补充约束力证明（在职/房产/家庭关系），并简短解释上次的疑点。",
+        "二签时如实说明曾被拒并附理由，反而显得坦诚可信；避开旅游旺季也会更稳。",
+    ],
+    "en": [
+        "The refusal letter states the reason (a Schengen visa code) — read it first and address that exact point.",
+        "Appeal: a written appeal within the embassy's deadline, best when your file was sound and the call seems wrong.",
+        "Reapply (usually faster): strengthen the weak point — beef up proof of funds, give a concrete itinerary,",
+        "add ties to home (employment / property / family), and briefly clear up last time's doubts.",
+        "Declaring the prior refusal honestly actually reads as credible; applying off-peak helps too.",
+    ],
+}
+
+
+def print_mood(result: dict):
+    L = LANG
+    key = result.get("key", "generic")
+
+    raw = result.get("raw_message")
+    if raw:
+        label = "原始文案" if L == "zh" else "Official message"
+        print(f"📄 {label}：\n   {raw}\n")
+
+    mood = _MOOD.get(L, _MOOD["en"]).get(key) or _MOOD["en"].get(key, "")
+    if mood:
+        print(mood)
+        print()
+
+    # Offer a concrete second-application plan whenever a decision is reached,
+    # since VFS tracking does not reveal approve vs. refuse on its own.
+    if key in ("decision", "dispatched", "delivered", "collection"):
+        title = "💡 如果被拒了——二签 / 申诉方案" if L == "zh" else "💡 If refused — reapply / appeal plan"
+        print(title)
+        for line in _REAPPLY.get(L, _REAPPLY["en"]):
+            print(f"   • {line}")
+        print()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -519,6 +612,7 @@ def main():
     result = track(q_param, args.reference, args.last_name)
     if result:
         print_card(result, country_name, country_code)
+        print_mood(result)
     else:
         print(f"\n   ❌ {tt('retry', n=MAX_CAPTCHA_RETRIES, total=MAX_CAPTCHA_RETRIES)}")
         print(f"   {tt('ref')} / {tt('name')} 拼写是否正确？\n")
