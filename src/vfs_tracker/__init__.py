@@ -463,6 +463,60 @@ def print_mood(result: dict):
         print()
 
 
+def print_ees_result(result: dict):
+    L = detect_lang()
+    title = "EU EES 短期停留验证结果" if L == "zh" else "EU EES Short-Stay Verification Result"
+    status = result.get("authorised_stay") or result.get("status", "unknown").upper()
+    days = result.get("remaining_days_at_entry")
+    official = result.get("official_text", "")
+
+    print(f"\n{'─'*60}")
+    print(f"🌍 {title}")
+    print(f"   Authorised stay: {status}")
+    if days is not None:
+        label = "入境时剩余授权停留天数" if L == "zh" else "Remaining days at the moment of entry"
+        print(f"   {label}: {days}")
+    print(f"{'─'*60}")
+    if official:
+        label = "官方结果文案" if L == "zh" else "Official result text"
+        print(f"\n📄 {label}:")
+        for line in official.splitlines():
+            print(f"   {line}")
+    if result.get("message"):
+        print(f"\n{result['message']}")
+
+
+def maybe_run_ees_from_args(args, country_code: str):
+    passport = args.ees_passport or os.environ.get("VFS_TRACKER_EES_PASSPORT")
+    if not passport or args.no_ees:
+        return
+
+    entry_date = args.ees_entry or os.environ.get("VFS_TRACKER_EES_ENTRY_DATE")
+    exit_date = args.ees_exit or os.environ.get("VFS_TRACKER_EES_EXIT_DATE")
+    issuing_country = (
+        args.ees_issuing
+        or os.environ.get("VFS_TRACKER_EES_ISSUING_COUNTRY")
+        or "CHN"
+    )
+
+    if not entry_date and not exit_date:
+        print("\n🌍 EES skipped: provide --ees-entry and/or --ees-exit to calculate stay.")
+        return
+
+    print("\n🌍 Running EES check after VFS status...")
+    result = ees_check(
+        passport_number=passport,
+        issuing_country=issuing_country,
+        destination_code=country_code,
+        entry_date=entry_date,
+        exit_date=exit_date,
+    )
+    if result:
+        print_ees_result(result)
+    else:
+        print("\n🌍 EES check did not return a parseable result.")
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  Q-Param helpers
 # ══════════════════════════════════════════════════════════════════════
@@ -559,6 +613,13 @@ def main():
     parser.add_argument("-l", "--last-name", help="Last Name / Surname")
     parser.add_argument("--fetch-q", action="store_true",
                         help="One-time: fetch and cache tracking endpoint")
+    parser.add_argument("--ees-passport", help="Also run EES check with this passport number")
+    parser.add_argument("--ees-issuing", default="CHN",
+                        help="EES issuing country code (default: CHN)")
+    parser.add_argument("--ees-entry", help="EES intended entry date (DD-MM-YYYY)")
+    parser.add_argument("--ees-exit", help="EES intended exit date (DD-MM-YYYY)")
+    parser.add_argument("--no-ees", action="store_true",
+                        help="Disable automatic EES check even if EES env vars are set")
 
     args = parser.parse_args()
 
@@ -613,14 +674,11 @@ def main():
     if result:
         print_card(result, country_name, country_code)
         print_mood(result)
+        maybe_run_ees_from_args(args, country_code)
     else:
         print(f"\n   ❌ {tt('retry', n=MAX_CAPTCHA_RETRIES, total=MAX_CAPTCHA_RETRIES)}")
         print(f"   {tt('ref')} / {tt('name')} 拼写是否正确？\n")
         sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -725,10 +783,6 @@ def ees_check(passport_number: str, issuing_country: str = "CHN",
         time.sleep(3)
         target = _captcha_solve(driver)
         if target is None:
-            print(f"   ⚠️ Could not read CAPTCHA numbers, falling back to brute-force")
-            target = _captcha_bruteforce(driver)
-
-        if target is None:
             print(f"   ❌ Could not solve CAPTCHA")
             return None
 
@@ -786,6 +840,15 @@ def _captcha_solve(driver) -> int | None:
         'fourteen': 14, 'fifteen': 15, 'sixteen': 16, 'seventeen': 17,
         'eighteen': 18, 'nineteen': 19, 'twenty': 20, 'thirty': 30,
         'forty': 40, 'fifty': 50, 'fourty': 40,
+        'twentyone': 21, 'twentytwo': 22, 'twentythree': 23,
+        'twentyfour': 24, 'twentyfive': 25, 'twentysix': 26,
+        'twentyseven': 27, 'twentyeight': 28, 'twentynine': 29,
+        'thirtyone': 31, 'thirtytwo': 32, 'thirtythree': 33,
+        'thirtyfour': 34, 'thirtyfive': 35, 'thirtysix': 36,
+        'thirtyseven': 37, 'thirtyeight': 38, 'thirtynine': 39,
+        'fortyone': 41, 'fortytwo': 42, 'fortythree': 43,
+        'fortyfour': 44, 'fortyfive': 45, 'fortysix': 46,
+        'fortyseven': 47, 'fortyeight': 48, 'fortynine': 49,
         'thity': 30, 'thityone': 31, 'thitytwo': 32, 'thitythree': 33,
         'thityfour': 34, 'thityfive': 35, 'thitysix': 36, 'thityseven': 37,
         'thityeight': 38, 'thitynine': 39,
@@ -803,12 +866,23 @@ def _captcha_solve(driver) -> int | None:
             continue
         b64 = src.split(",", 1)[1]
         raw = base64.b64decode(b64)
-        pil = Image.open(io.BytesIO(raw))
+        pil = Image.open(io.BytesIO(raw)).convert("RGB")
         w, h = pil.size
-        big = pil.resize((w * 8, h * 8), Image.NEAREST)
-        buf = io.BytesIO()
-        big.convert("RGB").save(buf, format="PNG")
-        text = ocr.classification(buf.getvalue()).lower().strip()
+        texts = []
+        for scale in (4, 8, 12):
+            big = pil.resize((w * scale, h * scale), Image.NEAREST)
+            buf = io.BytesIO()
+            big.save(buf, format="PNG")
+            texts.append((ocr.classification(buf.getvalue()) or "").lower().strip())
+
+            gray = big.convert("L")
+            bw = gray.point(lambda px: 255 if px > 180 else 0)
+            buf = io.BytesIO()
+            bw.save(buf, format="PNG")
+            texts.append((ocr.classification(buf.getvalue()) or "").lower().strip())
+
+        text = " ".join(texts)
+        compact = re.sub(r"[^a-z0-9]", "", text)
 
         # Direct integer
         digits = re.findall(r'\d+', text)
@@ -820,7 +894,7 @@ def _captcha_solve(driver) -> int | None:
         # Word match
         matched = False
         for word, val in sorted(WORD_MAP.items(), key=lambda x: -len(x[0])):
-            if word in text:
+            if word in compact:
                 values.append(val)
                 matched = True
                 break
@@ -836,10 +910,17 @@ def _captcha_solve(driver) -> int | None:
     if a == -1: return b if b <= 50 else None
     if b == -1: return a if a <= 50 else None
 
-    if a <= 9 and b <= 9: return a * 10 + b
-    if a <= 9 and b >= 10: return b + a
-    if a >= 10 and b <= 9: return a + b
-    return min(a + b, 50)
+    body = driver.find_element(By.TAG_NAME, "body").text.lower()
+    if any(word in body for word in ["lowest", "smallest", "minimum"]):
+        return min(a, b)
+    if any(word in body for word in ["highest", "largest", "maximum"]):
+        return max(a, b)
+
+    # Older widget copies occasionally ask for a two-digit number without
+    # "highest/lowest". Only combine single digits in that narrow fallback.
+    if a <= 9 and b <= 9:
+        return a * 10 + b
+    return max(a, b)
 
 
 def _captcha_slider_drag(driver, target: int):
@@ -847,6 +928,7 @@ def _captcha_slider_drag(driver, target: int):
     import random
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
 
     slider = driver.find_element(By.CSS_SELECTOR, 'input[name="wt_captcha_slider_text"]')
     driver.execute_script("""
@@ -856,16 +938,33 @@ def _captcha_slider_drag(driver, target: int):
     """, slider)
     time.sleep(0.3)
 
+    min_v = int(float(slider.get_attribute("min") or 0))
+    max_v = int(float(slider.get_attribute("max") or 50))
+    target = max(min_v, min(max_v, target))
+
+    # Keyboard input is more precise than pointer dragging for <input type=range>
+    # and still exercises the widget's normal event handlers.
+    try:
+        slider.click()
+        slider.send_keys(Keys.HOME)
+        for _ in range(target - min_v):
+            slider.send_keys(Keys.ARROW_RIGHT)
+            time.sleep(random.uniform(0.005, 0.015))
+        selected = int(float(slider.get_attribute("value") or 0))
+        if selected == target:
+            time.sleep(0.5)
+            return
+    except Exception:
+        pass
+
     rect = driver.execute_script("return arguments[0].getBoundingClientRect();", slider)
     w, h = rect['width'], rect['height']
+    target_px = int(((target - min_v) / max(1, max_v - min_v)) * (w - 12))
 
-    # Clamp target to valid range
-    target = max(0, min(50, target))
-    target_px = max(10, int((target / 50) * (w - 30)))
-
-    # Human-like drag in place — move to offset, click, drag, release
-    start_x = 10
-    y_mid = h // 2
+    # Selenium range offsets are measured from the element centre. Start near
+    # the left edge, then drag right to the target value.
+    start_x = int(-w / 2) + 6
+    y_mid = 0
 
     actions = ActionChains(driver)
     actions.move_to_element_with_offset(slider, start_x, y_mid)
@@ -883,7 +982,7 @@ def _captcha_slider_drag(driver, target: int):
         chunk += random.randint(-4, 4)
         chunk = max(1, chunk)
         moved += chunk
-        actions.move_by_offset(chunk, random.randint(-2, 2))
+        actions.move_by_offset(chunk, random.randint(-1, 1))
         actions.pause(random.uniform(0.01, 0.03))
 
     actions.pause(random.uniform(0.1, 0.25))
@@ -905,49 +1004,103 @@ def _captcha_bruteforce(driver) -> int | None:
     return None
 
 
+def _extract_ees_official_text(body_text: str) -> str:
+    lines = [line.strip() for line in body_text.splitlines() if line.strip()]
+    start = next(
+        (i for i, line in enumerate(lines)
+         if re.search(r"authori[sz]ed\s+stay\s*:", line, re.I)),
+        None,
+    )
+    if start is None:
+        return ""
+
+    stop_markers = (
+        "1 - please note",
+        "返回顶部",
+        "back to top",
+        "about this site",
+        "关于本网站",
+    )
+    selected = []
+    for line in lines[start:]:
+        lower = line.lower()
+        if selected and any(lower.startswith(marker) for marker in stop_markers):
+            break
+        selected.append(line)
+    return "\n".join(selected)
+
+
 def extract_ees_result(body_text: str) -> dict | None:
-    """Parse EES verification result from page text."""
-    result = {"raw": body_text[:1500], "status": "unknown", "days": None, "message": ""}
+    """Parse EES verification result from the official result section only."""
+    result = {
+        "raw": body_text,
+        "status": "unknown",
+        "authorised_stay": None,
+        "days": None,
+        "remaining_days_at_entry": None,
+        "official_text": "",
+        "message": "",
+    }
 
     lower = body_text.lower()
+    L = detect_lang()
 
-    # Try to find explicit OK / not OK
-    if re.search(r"(?:OK|entry is allowed|you can enter)", lower):
-        result["status"] = "ok"
-    elif re.search(r"(?:not OK|entry is not allowed|cannot enter|not allowed)", lower):
-        result["status"] = "not_ok"
+    if "verification failed" in lower or "验证失败" in lower:
+        result["message"] = (
+            "⚠️ EES 验证失败，请重试验证码。"
+            if L == "zh"
+            else "⚠️ EES verification failed; retry the CAPTCHA."
+        )
+        return result
 
-    # Try days
-    days_m = re.search(r"(\d{1,3})\s*days?\s*(?:of|remaining|allowed|stay|authorised)", lower)
+    official_text = _extract_ees_official_text(body_text)
+    result["official_text"] = official_text
+    source = official_text or body_text
+
+    status_m = re.search(r"authori[sz]ed\s+stay\s*:\s*(not\s+ok|ok)\b", source, re.I)
+    if status_m:
+        authorised = re.sub(r"\s+", " ", status_m.group(1).upper())
+        result["authorised_stay"] = authorised
+        result["status"] = "not_ok" if authorised == "NOT OK" else "ok"
+
+    days_m = re.search(
+        r"remaining\s+days\s+at\s+the\s+moment\s+of\s+entry\s*:?\s*(?:\n|\r\n?)?\s*(\d{1,3})",
+        source,
+        re.I,
+    )
     if days_m:
+        result["remaining_days_at_entry"] = days_m.group(1)
         result["days"] = days_m.group(1)
 
-    # Heuristic fallback
-    if result["status"] == "unknown":
-        if "0 days" in lower or "zero days" in lower:
-            result["status"] = "not_ok"
-            result["days"] = "0"
-        elif "days" in lower and any(w in lower for w in ["allowed", "authorised", "remain"]):
-            result["status"] = "ok"
-
-    # Build readable message
-    L = detect_lang()
     if result["status"] == "ok":
-        days = result.get("days", "")
-        if days:
-            if L == "zh":
-                result["message"] = f"✅ OK — 剩余 {days} 天可停留"
-            else:
-                result["message"] = f"✅ OK — {days} days of stay remaining"
+        days = result.get("remaining_days_at_entry")
+        if days is not None:
+            result["message"] = (
+                f"✅ OK — 入境时剩余授权停留 {days} 天"
+                if L == "zh"
+                else f"✅ OK — {days} authorised days remaining at entry"
+            )
         else:
-            result["message"] = "✅ OK — entry is allowed"
+            result["message"] = "✅ OK"
     elif result["status"] == "not_ok":
-        result["message"] = "❌ NOT OK — 可能无法入境" if L == "zh" else "❌ NOT OK — entry may not be allowed"
+        days = result.get("remaining_days_at_entry")
+        if days is not None:
+            result["message"] = (
+                f"❌ NOT OK — 入境时剩余授权停留 {days} 天"
+                if L == "zh"
+                else f"❌ NOT OK — {days} authorised days remaining at entry"
+            )
+        else:
+            result["message"] = "❌ NOT OK"
     else:
         result["message"] = (
-            "⚠️ 无法自动解析结果，API 返回 422 (验证码校验失败)"
+            "⚠️ 无法在页面中找到 Authorised stay 结果。"
             if L == "zh"
-            else "⚠️ Could not parse result (API returned 422 — captcha validation failed)"
+            else "⚠️ Could not find the Authorised stay result on the page."
         )
 
     return result
+
+
+if __name__ == "__main__":
+    main()

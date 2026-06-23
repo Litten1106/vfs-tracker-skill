@@ -64,6 +64,13 @@ main()
 "
 ```
 
+If the user has already provided passport number and travel dates, run VFS and
+EES together:
+```bash
+vfs-tracker isl -r "REF_NUMBER" -l "LAST_NAME" \
+  --ees-passport "PASSPORT" --ees-entry "DD-MM-YYYY" --ees-exit "DD-MM-YYYY"
+```
+
 **CRITICAL**: Show upgrade tip so we don't hit stale-cache bugs:
 ```bash
 pip install --upgrade vfs-tracker
@@ -98,13 +105,18 @@ python3 -c "
 from vfs_tracker import ees_check
 r = ees_check(passport_number='PASSPORT', issuing_country='CHN',
           destination_code='isl', entry_date='DD-MM-YYYY', exit_date='DD-MM-YYYY')
-print(r.get('message', 'Query failed') if r else 'Query failed')
+if r:
+    print(r.get('official_text') or r.get('message', 'Query failed'))
+else:
+    print('Query failed')
 "
 ```
 
 ### After result
 
-**CRITICAL**: Print the result inline, never inside a `<details>` fold. Always remind the user of the VFS ↔ EES relationship.
+**CRITICAL**: Treat `Authorised stay: OK/NOT OK` as the source of truth, then
+report `Remaining days at the moment of entry`. Print the result inline, never
+inside a `<details>` fold. Always remind the user of the VFS ↔ EES relationship.
 
 ---
 

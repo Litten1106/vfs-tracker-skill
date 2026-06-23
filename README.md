@@ -91,6 +91,10 @@ pip install vfs-tracker
 # 2. Track your visa (Iceland is pre-cached)
 vfs-tracker isl -r "ISL/PVG/010101/0001/01" -l "DOE"
 
+# Track VFS and also check EES in the same run
+vfs-tracker isl -r "ISL/PVG/010101/0001/01" -l "DOE" \
+  --ees-passport "E12345678" --ees-entry "23-09-2026" --ees-exit "04-10-2026"
+
 # 3. Check EU EES stay duration
 python3 -c "
 from vfs_tracker import ees_check
@@ -118,6 +122,11 @@ vfs-tracker <country_code> -r <REF> -l <NAME>
 |--------|-------------|
 | `-r, --reference` | Application Reference Number (from VFS receipt) |
 | `-l, --last-name` | Last Name / Surname (as on passport) |
+| `--ees-passport` | Also run EES check with this passport number |
+| `--ees-entry` | Intended EES entry date (`DD-MM-YYYY`) |
+| `--ees-exit` | Intended EES exit date (`DD-MM-YYYY`) |
+| `--ees-issuing` | EES issuing country code (default: `CHN`) |
+| `--no-ees` | Disable automatic EES check from environment variables |
 | `--fetch-q` | Fetch & cache tracking endpoint for a country |
 | `list` | Show all 29 supported Schengen countries |
 
@@ -142,7 +151,7 @@ The EU EES calculator uses a **2-digit number selection CAPTCHA** (two tiny imag
 
 1. Extracts both images from the page
 2. Uses ddddocr to read the number (digit image or word image like "thirty-seven")
-3. Computes the target value (0–50)
+3. Reads whether the widget asks for the highest or lowest number
 4. Drags the slider with human-like mouse movement (variable speed, Y-axis jitter, random pauses)
 5. Submits the form — fully automated
 
@@ -195,6 +204,10 @@ The EU EES calculator uses a **2-digit number selection CAPTCHA** (two tiny imag
 
 ## What's New
 
+- **1.0.4** — Fixes EES parsing to trust only the official
+  `Authorised stay: OK/NOT OK` result section, extracts
+  `Remaining days at the moment of entry`, and can run EES after VFS when
+  passport/travel dates are supplied.
 - **1.0.3** — Surfaces the full original VFS message verbatim, plus warm,
   per-status encouragement (and a reapply/appeal plan once a decision is made).
 - **1.0.2** — Reliable CAPTCHA handling: uppercase normalization, fresh captcha
