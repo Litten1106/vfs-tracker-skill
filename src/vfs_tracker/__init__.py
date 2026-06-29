@@ -12,11 +12,16 @@ Usage:
 """
 
 import argparse
+from html import unescape
+from html.parser import HTMLParser
 import json
 import os
+import random
 import re
+import shutil
 import sys
 import time
+from urllib.parse import urljoin
 from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────
@@ -27,6 +32,7 @@ VFS_TRACKING_BASE = "https://www.vfsvisaonline.com"
 VFS_TRACKING_PATH = "/Global-Passporttracking/Track/Index"
 MAX_CAPTCHA_RETRIES = 8
 EES_API = "https://travel-europe.europa.eu/api/tcn/stay-verification"
+HTTP_TIMEOUT = 30
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -204,10 +210,244 @@ def status_info(key: str):
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  Core: headless Selenium + ddddocr
+#  Core: HTTP first, Selenium fallback
 # ══════════════════════════════════════════════════════════════════════
 
-def track(q_param: str, reference_number: str, last_name: str) -> dict | None:
+class _VfsFormParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_form = False
+        self.form_action = ""
+        self.inputs = {}
+        self.captcha_src = ""
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        tag = tag.lower()
+        if tag == "form" and attrs.get("id") == "Index":
+            self.in_form = True
+            self.form_action = attrs.get("action", "")
+            return
+        if not self.in_form:
+            return
+        if tag == "input":
+            name = attrs.get("name")
+            typ = (attrs.get("type") or "").lower()
+            if name and typ not in ("submit", "reset", "button"):
+                self.inputs[name] = attrs.get("value", "")
+        elif tag == "img" and attrs.get("id") == "CaptchaImage":
+            self.captcha_src = attrs.get("src", "")
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "form" and self.in_form:
+            self.in_form = False
+
+
+class _TextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+
+    def handle_data(self, data):
+        text = data.strip()
+        if text:
+            self.parts.append(text)
+
+    def text(self) -> str:
+        return "\n".join(self.parts)
+
+
+def _html_to_text(html: str) -> str:
+    parser = _TextExtractor()
+    parser.feed(html)
+    return unescape(parser.text())
+
+
+def _parse_vfs_form(html: str) -> _VfsFormParser:
+    parser = _VfsFormParser()
+    parser.feed(html)
+    if not parser.form_action or "CaptchaDeText" not in parser.inputs:
+        raise RuntimeError("VFS form or CAPTCHA token not found")
+    return parser
+
+
+def _new_http_session():
+    import certifi
+    import requests
+
+    session = requests.Session()
+    session.verify = certifi.where()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+        "Connection": "keep-alive",
+    })
+    return session
+
+
+def _is_cloudflare_limited(text: str, status_code: int) -> bool:
+    lower = text.lower()
+    return status_code == 429 or (
+        status_code == 403 and ("cloudflare" in lower or "access denied" in lower)
+    )
+
+
+class VfsRateLimited(RuntimeError):
+    pass
+
+
+def _captcha_png(image) -> bytes:
+    import io
+
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _vfs_captcha_variants(raw: bytes) -> list[bytes]:
+    import io
+    from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageSequence
+
+    variants = []
+    image = Image.open(io.BytesIO(raw))
+    frames = []
+    for frame in ImageSequence.Iterator(image):
+        rgb = frame.convert("RGB")
+        colors = rgb.getcolors(maxcolors=1_000_000) or []
+        frames.append((len(colors), rgb.copy()))
+    if not frames:
+        frames = [(0, image.convert("RGB"))]
+
+    for _, image in sorted(frames, key=lambda item: item[0], reverse=True)[:4]:
+        for scale in (3, 5):
+            big = image.resize((image.width * scale, image.height * scale), Image.Resampling.LANCZOS)
+            variants.append(_captcha_png(big))
+
+            gray = ImageOps.grayscale(big)
+            gray = ImageEnhance.Contrast(gray).enhance(2.2)
+            variants.append(_captcha_png(gray.point(lambda px: 0 if px < 175 else 255)))
+
+            # The VFS captcha often renders thin blue text over orange/noisy
+            # backgrounds. Keep likely blue ink and wash everything else white.
+            mask = Image.new("L", big.size, 255)
+            src = big.load()
+            dst = mask.load()
+            for y in range(big.height):
+                for x in range(big.width):
+                    r, g, b = src[x, y]
+                    if b > 80 and b > r + 18 and b > g + 8:
+                        dst[x, y] = 0
+            mask = mask.filter(ImageFilter.MedianFilter(size=3))
+            variants.append(_captcha_png(mask))
+    return variants
+
+
+def solve_vfs_captcha(raw: bytes, ocr=None) -> str:
+    import ddddocr
+
+    ocr = ocr or ddddocr.DdddOcr(show_ad=False)
+    candidates = []
+    try:
+        variants = _vfs_captcha_variants(raw)
+    except Exception:
+        return ""
+    for image_bytes in variants:
+        text = ocr.classification(image_bytes) or ""
+        text = re.sub(r"[^A-Za-z]", "", text).upper()
+        if text:
+            candidates.append(text)
+        if len(text) == 5:
+            return text
+    five = [c for c in candidates if len(c) == 5]
+    if five:
+        return five[0]
+    return max(candidates, key=len, default="")
+
+
+def track_http(q_param: str, reference_number: str, last_name: str) -> dict | None:
+    import ddddocr
+    import requests
+
+    session = _new_http_session()
+    ocr = ddddocr.DdddOcr(show_ad=False)
+    url = f"{VFS_TRACKING_BASE}{VFS_TRACKING_PATH}?q={q_param}"
+    print(f"\n🌐 {tt('fetching')} [http]")
+
+    for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
+        try:
+            page = session.get(url, timeout=HTTP_TIMEOUT)
+            html = page.text
+            if _is_cloudflare_limited(html, page.status_code):
+                raise VfsRateLimited("Cloudflare rate limit / access denied")
+            page.raise_for_status()
+            form = _parse_vfs_form(html)
+            if attempt == 1:
+                print(f"   ✅ {tt('loaded', n=len(html))}")
+                print(f"   ✅ {tt('filled')}")
+
+            captcha_url = urljoin(VFS_TRACKING_BASE, form.captcha_src)
+            captcha = session.get(captcha_url, timeout=HTTP_TIMEOUT, headers={"Referer": url})
+            captcha_text = captcha.text if "text" in captcha.headers.get("Content-Type", "") else ""
+            if _is_cloudflare_limited(captcha_text, captcha.status_code):
+                raise VfsRateLimited("Cloudflare rate limit / access denied on CAPTCHA")
+            captcha.raise_for_status()
+            content_type = captcha.headers.get("Content-Type", "").lower()
+            if "html" in content_type or captcha.content.lstrip().startswith(b"<"):
+                raise RuntimeError("CAPTCHA endpoint returned HTML instead of an image")
+            text = solve_vfs_captcha(captcha.content, ocr=ocr)
+            print(f"   🔐 {tt('captcha', text=text or '?')}")
+            if len(text) != 5:
+                print(f"   🔄 {tt('retry', n=attempt, total=MAX_CAPTCHA_RETRIES)}")
+                time.sleep(random.uniform(1.0, 2.5))
+                continue
+
+            data = dict(form.inputs)
+            data.update({
+                "AppRefNo": reference_number,
+                "LastName": last_name,
+                "CaptchaInputText": text,
+            })
+            post_url = urljoin(VFS_TRACKING_BASE, form.form_action)
+            response = session.post(
+                post_url,
+                data=data,
+                timeout=HTTP_TIMEOUT,
+                headers={
+                    "Referer": url,
+                    "Origin": VFS_TRACKING_BASE,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            body_text = _html_to_text(response.text)
+            lower = body_text.lower()
+
+            if _is_cloudflare_limited(response.text, response.status_code):
+                raise VfsRateLimited("Cloudflare rate limit / access denied")
+            if response.status_code >= 500:
+                print(f"   🔄 Server returned {response.status_code}, retrying ({attempt}/{MAX_CAPTCHA_RETRIES})")
+                time.sleep(random.uniform(2.0, 4.0))
+                continue
+            if "incorrect" in lower or "captcha" in lower and "required" in lower:
+                print(f"   🔄 {tt('retry', n=attempt, total=MAX_CAPTCHA_RETRIES)}")
+                time.sleep(random.uniform(1.0, 2.5))
+                continue
+
+            return parse_body(body_text, reference_number, last_name)
+        except VfsRateLimited as exc:
+            print(f"   ⚠️  {exc}. Stop retrying for now to avoid extending the block.")
+            return None
+        except (requests.RequestException, RuntimeError) as exc:
+            print(f"   ⚠️  HTTP attempt failed: {exc}")
+            time.sleep(random.uniform(1.5, 3.0))
+
+    return None
+
+
+def track_selenium(q_param: str, reference_number: str, last_name: str) -> dict | None:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.common.by import By
@@ -234,7 +474,7 @@ def track(q_param: str, reference_number: str, last_name: str) -> dict | None:
         driver.set_page_load_timeout(45)
 
         url = f"{VFS_TRACKING_BASE}{VFS_TRACKING_PATH}?q={q_param}"
-        print(f"\n🌐 {tt('fetching')}")
+        print(f"\n🌐 {tt('fetching')} [selenium]")
         driver.get(url)
         WebDriverWait(driver, 30).until(lambda d: len(d.page_source) > 5000)
         time.sleep(1.5)
@@ -296,6 +536,23 @@ def track(q_param: str, reference_number: str, last_name: str) -> dict | None:
             driver.quit()
 
     return None
+
+
+def track(q_param: str, reference_number: str, last_name: str, mode: str = "auto") -> dict | None:
+    mode = mode.lower()
+    if mode == "http":
+        return track_http(q_param, reference_number, last_name)
+    if mode == "selenium":
+        return track_selenium(q_param, reference_number, last_name)
+    if mode != "auto":
+        raise ValueError(f"Unsupported mode: {mode}")
+
+    result = track_http(q_param, reference_number, last_name)
+    if result and result.get("key") != "generic":
+        return result
+
+    print("   ⚠️  HTTP mode did not produce a standard result; falling back to Selenium.")
+    return track_selenium(q_param, reference_number, last_name)
 
 
 def parse_body(body_text: str, reference_number: str, last_name: str) -> dict:
@@ -599,6 +856,53 @@ def fetch_q_param_selenium(country_code: str) -> str | None:
     return q
 
 
+def doctor():
+    print("\n🩺 vfs-tracker doctor\n")
+    print(f"Python : {sys.version.split()[0]} ({sys.executable})")
+    print(f"OS     : {sys.platform}")
+
+    for module in ["requests", "certifi", "PIL", "ddddocr", "selenium", "selenium_stealth"]:
+        try:
+            __import__(module)
+            print(f"✅ {module}")
+        except Exception as exc:
+            print(f"❌ {module}: {exc}")
+
+    chrome = (
+        shutil.which("google-chrome")
+        or shutil.which("google-chrome-stable")
+        or shutil.which("chromium")
+        or shutil.which("chromium-browser")
+    )
+    mac_chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    if not chrome and Path(mac_chrome).exists():
+        chrome = mac_chrome
+
+    if chrome:
+        print(f"✅ Chrome: {chrome}")
+    else:
+        print("⚠️  Chrome not found. VFS HTTP mode can still work; EES currently needs Chrome.")
+
+    try:
+        session = _new_http_session()
+        q_param = load_q_params().get("isl")
+        url = (
+            f"{VFS_TRACKING_BASE}{VFS_TRACKING_PATH}?q={q_param}"
+            if q_param else VFS_TRACKING_BASE
+        )
+        r = session.get(url, timeout=10)
+        if r.status_code == 200:
+            print(f"✅ HTTPS to VFS tracking: HTTP {r.status_code}")
+        else:
+            print(f"⚠️  HTTPS to VFS tracking: HTTP {r.status_code}")
+    except Exception as exc:
+        print(f"❌ HTTPS to VFS tracking: {exc}")
+
+    print("\nDefault VFS mode is auto: Chrome-free HTTP first, Selenium fallback.")
+    print("For debugging only, force HTTP with:")
+    print("   vfs-tracker isl -r 'REF' -l 'LAST' --mode http")
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  CLI
 # ══════════════════════════════════════════════════════════════════════
@@ -611,6 +915,8 @@ def main():
     parser.add_argument("country", nargs="?", help="Country code (e.g. isl, deu, fra) or 'list'")
     parser.add_argument("-r", "--reference", help="Application Reference Number")
     parser.add_argument("-l", "--last-name", help="Last Name / Surname")
+    parser.add_argument("--mode", choices=["auto", "http", "selenium"], default="auto",
+                        help="VFS query backend (default: auto; use http for Claude CLI / containers)")
     parser.add_argument("--fetch-q", action="store_true",
                         help="One-time: fetch and cache tracking endpoint")
     parser.add_argument("--ees-passport", help="Also run EES check with this passport number")
@@ -622,6 +928,10 @@ def main():
                         help="Disable automatic EES check even if EES env vars are set")
 
     args = parser.parse_args()
+
+    if args.country and args.country.lower() == "doctor":
+        doctor()
+        return
 
     if not args.country or args.country.lower() == "list":
         countries = load_countries()
@@ -670,7 +980,7 @@ def main():
     print(f"    {tt('name')}: {args.last_name}")
     print(f"{'─'*60}")
 
-    result = track(q_param, args.reference, args.last_name)
+    result = track(q_param, args.reference, args.last_name, mode=args.mode)
     if result:
         print_card(result, country_name, country_code)
         print_mood(result)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vfs-tracker"
-version = "1.0.4"
+version = "1.0.5"
 description = "Headless VFS Global Schengen Visa Status Tracker + EU EES calculator"
 readme = "README.md"
 license = "MIT"
@@ -26,6 +26,8 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "requests>=2.31.0",
+    "certifi>=2024.0.0",
     "selenium>=4.0.0",
     "selenium-stealth>=1.0.0",
     "ddddocr>=1.0.0",

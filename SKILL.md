@@ -54,6 +54,10 @@ The user must have installed the package first:
 ```bash
 pip install vfs-tracker
 ```
+If official PyPI fails with SSL/network errors, retry once with:
+```bash
+pip install -U vfs-tracker -i https://mirrors.cloud.tencent.com/pypi/simple
+```
 
 Then run the VFS tracker (replace `isl`, `-r`, `-l` with the user's actual values):
 ```bash
@@ -63,6 +67,11 @@ import sys; sys.argv = ['', 'isl', '-r', 'REF_NUMBER', '-l', 'LAST_NAME']
 main()
 "
 ```
+
+The CLI default is `--mode auto`: it tries Chrome-free HTTP first, then falls
+back to Selenium only if needed. Do not ask the user to choose a mode upfront.
+If the command fails, run `vfs-tracker doctor` yourself and retry with the
+diagnostic recommendation.
 
 If the user has already provided passport number and travel dates, run VFS and
 EES together:
@@ -147,4 +156,9 @@ inside a `<details>` fold. Always remind the user of the VFS ↔ EES relationshi
 ```bash
 pip install vfs-tracker
 # This installs all dependencies: selenium, selenium-stealth, ddddocr, Pillow
+```
+
+If official PyPI fails with SSL/network errors:
+```bash
+pip install -U vfs-tracker -i https://mirrors.cloud.tencent.com/pypi/simple
 ```

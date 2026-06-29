@@ -1,7 +1,7 @@
 # vfs-tracker 🛂
 
-> Headless VFS Global Schengen Visa Status Tracker + EU EES calculator  
-> Fully automated — Selenium + ddddocr + number-slider CAPTCHA solver
+> VFS Global Schengen Visa Status Tracker + EU EES calculator  
+> VFS uses a Chrome-free HTTP mode by default; EES uses Selenium for the slider CAPTCHA.
 
 <p align="center">
   <img src="https://img.shields.io/pypi/v/vfs-tracker" alt="PyPI">
@@ -26,10 +26,10 @@ Automatically query your Schengen visa status through **VFS Global** and check y
 
 | Platform | Status | Notes |
 |----------|:------:|-------|
-| macOS (Intel / Apple Silicon) | ✅ | Chrome required |
-| Linux (Ubuntu / Debian / CentOS) | ✅ | Chrome or Chromium required |
-| Windows 10 / 11 | ✅ | Chrome required |
-| WSL2 | ✅ | Needs Chrome installed in WSL |
+| macOS (Intel / Apple Silicon) | ✅ | VFS works without Chrome; EES needs Chrome |
+| Linux (Ubuntu / Debian / CentOS) | ✅ | Use `--mode http` for VFS in no-desktop sandboxes |
+| Windows 10 / 11 | ✅ | VFS works without Chrome; EES needs Chrome |
+| WSL2 / containers / Claude CLI sandboxes | ✅ | VFS HTTP mode recommended; EES may need a real Chrome runtime |
 
 **Mobile**: Not directly supported (Python runtime required), but works through any AI coding agent that has Python access — see below.
 
@@ -61,6 +61,13 @@ pip install vfs-tracker
 pip install vfs-tracker
 # The CLI entry point will be available:
 vfs-tracker isl -r "REF_NUMBER" -l "LAST_NAME"
+```
+
+If the official PyPI file host has SSL/network issues in a sandbox, install
+from a mirror instead:
+
+```bash
+pip install -U vfs-tracker -i https://mirrors.cloud.tencent.com/pypi/simple
 ```
 
 ### GitHub Copilot Chat
@@ -108,6 +115,9 @@ vfs-tracker list
 
 # 5. Pre-cache a new country
 vfs-tracker deu --fetch-q
+
+# 6. Diagnose local runtime/network only when something fails
+vfs-tracker doctor
 ```
 
 ---
@@ -122,6 +132,7 @@ vfs-tracker <country_code> -r <REF> -l <NAME>
 |--------|-------------|
 | `-r, --reference` | Application Reference Number (from VFS receipt) |
 | `-l, --last-name` | Last Name / Surname (as on passport) |
+| `--mode` | VFS backend: `auto`, `http`, or `selenium` (default: `auto`; force only for debugging) |
 | `--ees-passport` | Also run EES check with this passport number |
 | `--ees-entry` | Intended EES entry date (`DD-MM-YYYY`) |
 | `--ees-exit` | Intended EES exit date (`DD-MM-YYYY`) |
@@ -135,12 +146,17 @@ vfs-tracker <country_code> -r <REF> -l <NAME>
 ## How It Works
 
 ```
-Headless Chrome (no window)
-  └─ stealth.js anti-detection
-  └─ ddddocr: CAPTCHA OCR (VFS text-based)
-  └─ Custom number-slider solver (EU EES 2-digit puzzle)
-  └─ Human-like mouse drag simulation
-  └─ POST form → parse result → status card
+VFS status
+  └─ HTTP mode first: requests + certifi, no Chrome required
+  └─ Synchronized form tokens: __RequestVerificationToken + CaptchaDeText
+  └─ ddddocr with color-aware CAPTCHA preprocessing
+  └─ Selenium fallback when HTTP mode cannot parse a standard result
+
+EES calculator
+  └─ Headless Chrome for the EU slider CAPTCHA
+  └─ ddddocr reads the CAPTCHA numbers
+  └─ Human-like slider selection
+  └─ Parses official Authorised stay + remaining-days result
 ```
 
 ---
@@ -204,6 +220,9 @@ The EU EES calculator uses a **2-digit number selection CAPTCHA** (two tiny imag
 
 ## What's New
 
+- **1.0.5** — Adds Chrome-free VFS HTTP mode for Claude CLI / containers,
+  synchronized token handling, improved VFS CAPTCHA preprocessing, `--mode`,
+  and `vfs-tracker doctor`.
 - **1.0.4** — Fixes EES parsing to trust only the official
   `Authorised stay: OK/NOT OK` result section, extracts
   `Remaining days at the moment of entry`, and can run EES after VFS when
@@ -218,17 +237,32 @@ The EU EES calculator uses a **2-digit number selection CAPTCHA** (two tiny imag
 ## Requirements
 
 - **Python** ≥ 3.10
-- **Google Chrome** (or Chromium)
+- **Google Chrome** (or Chromium) only for EES / Selenium fallback
 - Internet connection
 
 ```bash
 pip install vfs-tracker  # installs all deps automatically
 ```
 
+If PyPI SSL fails in a restricted network:
+
+```bash
+pip install -U vfs-tracker -i https://mirrors.cloud.tencent.com/pypi/simple
+```
+
 Manual dependencies if installing from source:
 ```bash
-pip install selenium selenium-stealth ddddocr Pillow
+pip install requests certifi selenium selenium-stealth ddddocr Pillow
 ```
+
+Linux no-desktop notes:
+
+- Use `--mode http` for VFS status checks to avoid Chrome/X11/d-bus issues.
+- If you force Selenium on Ubuntu, install Chrome/Chromium and common runtime
+  libraries such as `libxdamage1`, `libnss3`, `libatk-bridge2.0-0`,
+  `libxkbcommon0`, `libgbm1`, and `libasound2`.
+- EES currently still needs a working Chrome runtime because the official EU
+  page uses an interactive slider CAPTCHA.
 
 ---
 
